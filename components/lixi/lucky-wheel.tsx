@@ -9,7 +9,6 @@ interface LuckyWheelProps {
   rotation: number;
   canSpin: boolean;
   isSpinning: boolean;
-  spinDurationMs: number;
   statusMessage: string;
   onSpin: () => void;
 }
@@ -19,7 +18,6 @@ export function LuckyWheel({
   rotation,
   canSpin,
   isSpinning,
-  spinDurationMs,
   statusMessage,
   onSpin,
 }: LuckyWheelProps) {
@@ -32,7 +30,6 @@ export function LuckyWheel({
   const wheelStyle: CSSProperties = {
     backgroundImage: `conic-gradient(${gradientStops})`,
     transform: `rotate(${rotation}deg)`,
-    transitionDuration: `${spinDurationMs}ms`,
   };
 
   return (

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { LuckyWheel } from "@/components/lixi/lucky-wheel";
 import { NamePhoneModal } from "@/components/lixi/name-phone-modal";
 import { ResultCelebration } from "@/components/lixi/result-celebration";
+import { usePhysicsSpin } from "@/hooks/use-physics-spin";
 import { buildPrizeSegments, type PrizeLabel } from "@/lib/prizes";
 
 interface RegisterResponse {
@@ -25,6 +26,12 @@ interface SpinResponse {
     label: PrizeLabel;
     amount: number;
   };
+}
+
+interface PendingSpinResult {
+  prize: SpinResponse["prize"];
+  participantName: string;
+  mode: "new_prize" | "existing_prize";
 }
 
 function usePrefersReducedMotion() {
@@ -81,7 +88,7 @@ function getErrorMessage(payload: unknown): string {
 export function LixiExperience() {
   const prefersReducedMotion = usePrefersReducedMotion();
   const prizeSegments = useMemo(() => buildPrizeSegments(), []);
-  const spinTimeoutRef = useRef<number | null>(null);
+  const pendingResultRef = useRef<PendingSpinResult | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(true);
   const [isInitialModal, setIsInitialModal] = useState(true);
@@ -90,7 +97,6 @@ export function LixiExperience() {
   const [formError, setFormError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("Vận may đang chờ bạn! Nhấn quay để mở lì xì Tết Bính Ngọ 2026.");
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
-  const [rotation, setRotation] = useState(0);
 
   const [participant, setParticipant] = useState<{
     id: string;
@@ -104,15 +110,36 @@ export function LixiExperience() {
     amount: number;
   } | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (spinTimeoutRef.current) {
-        window.clearTimeout(spinTimeoutRef.current);
-      }
-    };
+  const handleSpinAnimationComplete = useCallback(() => {
+    const pendingResult = pendingResultRef.current;
+    pendingResultRef.current = null;
+    setIsSpinning(false);
+
+    if (!pendingResult) {
+      return;
+    }
+
+    setPrize(pendingResult.prize);
+    setHasSpun(true);
+
+    if (pendingResult.mode === "existing_prize") {
+      setStatusMessage("Kết quả cũ đã được giữ nguyên cho số điện thoại này.");
+      setLiveAnnouncement(`Bạn đã quay trước đó và nhận ${pendingResult.prize.label}.`);
+      return;
+    }
+
+    setStatusMessage(`Chúc mừng ${pendingResult.participantName}! Bạn đã nhận ${pendingResult.prize.label}.`);
+    setLiveAnnouncement(`Chúc mừng, bạn nhận được ${pendingResult.prize.label}.`);
   }, []);
 
-  const spinDurationMs = prefersReducedMotion ? 900 : 5600;
+  const {
+    rotationDeg,
+    isAnimating: isWheelAnimating,
+    startImpulseSpin,
+    resolveToPrize,
+    cancelAndStop,
+    reset,
+  } = usePhysicsSpin({ onComplete: handleSpinAnimationComplete });
 
   async function handleRegister(payload: { name: string; phone: string }) {
     setIsRegistering(true);
@@ -146,15 +173,13 @@ export function LixiExperience() {
         phoneMasked: data.phoneMasked,
       });
 
-      if (spinTimeoutRef.current) {
-        window.clearTimeout(spinTimeoutRef.current);
-      }
+      pendingResultRef.current = null;
       setIsSpinning(false);
       setIsModalOpen(false);
       setIsInitialModal(false);
       setPrize(null);
       setHasSpun(false);
-      setRotation(0);
+      reset(0);
       setStatusMessage("Vận may đang chờ bạn! Nhấn quay để mở lì xì Tết Bính Ngọ 2026.");
       setLiveAnnouncement(`Xin chào ${data.name}, bạn đã sẵn sàng quay lì xì.`);
     } catch (error) {
@@ -170,8 +195,10 @@ export function LixiExperience() {
       return;
     }
 
+    pendingResultRef.current = null;
     setIsSpinning(true);
     setStatusMessage("Phúc — Lộc — Thọ... đang chốt lì xì cho bạn...");
+    startImpulseSpin();
 
     try {
       const response = await fetch("/api/spin", {
@@ -193,11 +220,13 @@ export function LixiExperience() {
       const data = responseBody as SpinResponse;
 
       if (data.status === "already_spun") {
-        setPrize(data.prize);
-        setHasSpun(true);
-        setIsSpinning(false);
-        setStatusMessage("Kết quả cũ đã được giữ nguyên cho số điện thoại này.");
-        setLiveAnnouncement(`Bạn đã quay trước đó và nhận ${data.prize.label}.`);
+        pendingResultRef.current = {
+          prize: data.prize,
+          participantName: participant.name,
+          mode: "existing_prize",
+        };
+        setStatusMessage("Đang dừng vòng quay để hiển thị kết quả cũ...");
+        cancelAndStop(1200);
         return;
       }
 
@@ -213,29 +242,19 @@ export function LixiExperience() {
         Math.min(targetSegment.endAngle - 0.4, targetSegment.centerAngle + randomOffset),
       );
 
-      const normalizedRotation = ((rotation % 360) + 360) % 360;
-      const requiredRotation = (360 - landingAngle - normalizedRotation + 360) % 360;
-      const extraTurns = prefersReducedMotion ? 2 * 360 : 8 * 360;
-      const nextRotation = rotation + extraTurns + requiredRotation;
-      setRotation(nextRotation);
+      pendingResultRef.current = {
+        prize: data.prize,
+        participantName: participant.name,
+        mode: "new_prize",
+      };
       setStatusMessage("Kim chỉ nam đang dừng lại... hồi hộp chưa?");
-
-      if (spinTimeoutRef.current) {
-        window.clearTimeout(spinTimeoutRef.current);
-      }
-
-      spinTimeoutRef.current = window.setTimeout(() => {
-        setPrize(data.prize);
-        setHasSpun(true);
-        setIsSpinning(false);
-        setStatusMessage(`Chúc mừng ${participant.name}! Bạn đã nhận ${data.prize.label}.`);
-        setLiveAnnouncement(`Chúc mừng, bạn nhận được ${data.prize.label}.`);
-      }, spinDurationMs + 120);
+      resolveToPrize(landingAngle);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Không thể quay lúc này.";
-      setIsSpinning(false);
+      pendingResultRef.current = null;
       setStatusMessage(message);
       setLiveAnnouncement(message);
+      cancelAndStop(900);
     }
   }
 
@@ -262,10 +281,9 @@ export function LixiExperience() {
       <div className="lixi-grid">
         <LuckyWheel
           segments={prizeSegments}
-          rotation={rotation}
-          canSpin={Boolean(participant) && !hasSpun}
+          rotation={rotationDeg}
+          canSpin={Boolean(participant) && !hasSpun && !isWheelAnimating}
           isSpinning={isSpinning}
-          spinDurationMs={spinDurationMs}
           statusMessage={statusMessage}
           onSpin={handleSpin}
         />
